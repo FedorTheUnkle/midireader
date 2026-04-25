@@ -117,17 +117,43 @@ class MidiListenerConfigurable : Configurable {
             stopLearning()
         }
     }
-    
+
+    private val mReceiver = object : Receiver {
+        override fun send(message: MidiMessage, timeStamp: Long) {
+            if (!isLearning) return
+
+            if (message is ShortMessage) {
+                if (message.command == ShortMessage.NOTE_ON && message.data2 > 0) {
+                    val noteNumber = message.data1
+                    val noteName = getNoteName(noteNumber)
+
+                    // Update UI on EDT
+                    SwingUtilities.invokeLater {
+                        triggerNoteField.text = noteNumber.toString()
+                        learnStatusLabel.text = "<html><font color='green'>✅ Learned: $noteName (MIDI $noteNumber)</font></html>"
+                        stopLearning()
+                    }
+                }
+            }
+        }
+
+        override fun close() {
+            learnStatusLabel.text += "2"
+        }
+    }
+
     private fun startLearning() {
         isLearning = true
         learnButton.text = "Stop Learning"
-        learnStatusLabel.text = "<html><font color='blue'>🎹 Waiting for MIDI input... Play a note!</font></html>"
+        learnStatusLabel.text = "<html><font color='green'>🎹 Waiting for MIDI input... Play a note!</font></html>"
         
         Thread {
             try {
                 val infos = MidiSystem.getMidiDeviceInfo()
                 
-                infos.forEach { info ->
+                infos.filter{
+                    it.description.contains("SHMIDI")
+                }.forEach { info ->
                     try {
                         val device = MidiSystem.getMidiDevice(info)
                         
@@ -138,28 +164,8 @@ class MidiListenerConfigurable : Configurable {
                             }
                             
                             val transmitter = device.transmitter
-                            transmitter.receiver = object : Receiver {
-                                override fun send(message: MidiMessage, timeStamp: Long) {
-                                    if (!isLearning) return
-                                    
-                                    if (message is ShortMessage) {
-                                        if (message.command == ShortMessage.NOTE_ON && message.data2 > 0) {
-                                            val noteNumber = message.data1
-                                            val noteName = getNoteName(noteNumber)
-                                            
-                                            // Update UI on EDT
-                                            SwingUtilities.invokeLater {
-                                                triggerNoteField.text = noteNumber.toString()
-                                                learnStatusLabel.text = "<html><font color='green'>✅ Learned: $noteName (MIDI $noteNumber)</font></html>"
-                                                stopLearning()
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                override fun close() {}
-                            }
-                            
+                            transmitter.receiver = mReceiver
+
                             midiDevices.add(device)
                         }
                     } catch (e: MidiUnavailableException) {
@@ -194,13 +200,18 @@ class MidiListenerConfigurable : Configurable {
 
                     val transmitters = device.transmitters
                     transmitters.forEach { transmitter ->
+                        transmitter.receiver?.close()
                         transmitter.close()
+//                        transmitter.receiver = null
+//                        transmitter.close()
                     }
+//                    device.transmitters.clear()
 
                     device.close()
                 }
             } catch (e: Exception) {
                 // Ignore close errors
+                learnButton.text += ""
             }
         }
         midiDevices.clear()
